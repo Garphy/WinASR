@@ -89,7 +89,7 @@ class ASRPipeline:
     def transcribe(
         self,
         audio_path: Union[str, Path],
-        language: str = "auto",
+        language: str = "zh",
         batch_size_s: int = 300,
     ) -> TranscriptionResult:
         """

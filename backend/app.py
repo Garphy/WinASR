@@ -50,7 +50,7 @@ async def health():
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(description="音频文件 (wav/mp3/m4a/flac)"),
-    language: str = Query(default="auto", description="语种: auto/zh/en/yue/ja/ko"),
+    language: str = Query(default="zh", description="语种: zh/auto/en/yue/ja/ko (默认中文)"),
     output_format: str = Query(default="json", description="输出格式: json/text"),
 ):
     """
