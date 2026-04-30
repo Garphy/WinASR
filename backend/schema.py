@@ -3,8 +3,44 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
+from enum import Enum
 import json
 import re
+
+
+class TaskState(str, Enum):
+    """任务状态"""
+    pending = "pending"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+
+
+@dataclass
+class TaskStatus:
+    """API 任务状态模型"""
+    task_id: str
+    state: TaskState
+    filename: str
+    progress: float = 0.0          # 0.0 ~ 1.0
+    result: Optional[dict] = None  # TranscriptionResult dict when completed
+    error: Optional[str] = None    # 错误信息 when failed
+    created_at: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        d = {
+            "task_id": self.task_id,
+            "state": self.state.value,
+            "filename": self.filename,
+            "progress": self.progress,
+        }
+        if self.result is not None:
+            d["result"] = self.result
+        if self.error is not None:
+            d["error"] = self.error
+        if self.created_at is not None:
+            d["created_at"] = self.created_at
+        return d
 
 
 @dataclass
@@ -27,6 +63,7 @@ class TranscriptionResult:
     duration: float                        # 音频总时长 (秒)
     num_speakers: int                      # 识别到的说话人数量
     segments: List[Segment]                # 所有语音片段
+    peaks: List[dict] = field(default_factory=list)  # 波形峰值数据 [{min, max}, ...]
     model_info: dict = field(default_factory=lambda: {
         "asr": "SenseVoiceSmall",
         "vad": "fsmn-vad",

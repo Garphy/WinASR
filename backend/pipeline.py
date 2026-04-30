@@ -178,11 +178,13 @@ class ASRPipeline:
 
             if total == 0:
                 logger.warning("No speech segments found")
+                peaks = self._generate_peaks(wav_path)
                 return TranscriptionResult(
                     audio_file=audio_path.name,
                     duration=0.0,
                     num_speakers=0,
                     segments=[],
+                    peaks=peaks,
                 )
 
             # 加载音频
@@ -258,11 +260,14 @@ class ASRPipeline:
             duration = segments[-1].end if segments else 0.0
             speakers = set(s.speaker for s in segments)
 
+            # Step 5: 生成波形峰值数据
+            peaks = self._generate_peaks(wav_path)
+
             elapsed = time.time() - t0
             logger.info(
-                "Done in %.1fs (%.1fx real-time): %d segments, %d speakers",
+                "Done in %.1fs (%.1fx real-time): %d segments, %d speakers, %d peaks",
                 elapsed, duration / elapsed if elapsed > 0 else 0,
-                len(segments), len(speakers),
+                len(segments), len(speakers), len(peaks),
             )
 
             return TranscriptionResult(
@@ -270,6 +275,7 @@ class ASRPipeline:
                 duration=duration,
                 num_speakers=len(speakers),
                 segments=segments,
+                peaks=peaks,
             )
 
         finally:
@@ -278,6 +284,30 @@ class ASRPipeline:
                 wav_path.unlink()
 
     # ── 内部方法 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _generate_peaks(wav_path: Path, chunk_size: int = 1024) -> list[dict]:
+        """
+        从 WAV 文件读取音频数据, 按 chunk_size 采样点计算每段的 min/max 幅度值.
+        返回 [{"min": float, "max": float}, ...] 数组, 用于前端波形绘制.
+        """
+        try:
+            wav, sr = torchaudio.load(str(wav_path))
+            # 取第一个声道
+            samples = wav[0].numpy()
+            peaks = []
+            for i in range(0, len(samples), chunk_size):
+                chunk = samples[i:i + chunk_size]
+                if len(chunk) == 0:
+                    break
+                peaks.append({
+                    "min": float(chunk.min()),
+                    "max": float(chunk.max()),
+                })
+            return peaks
+        except Exception as e:
+            logger.warning("Failed to generate peaks: %s", e)
+            return []
 
     def _run_vad(self, audio_path: Path) -> list[tuple[int, int]]:
         """VAD 切分, 返回 [(start_ms, end_ms), ...]"""

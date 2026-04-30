@@ -2,8 +2,6 @@
 __pycache__/
 *.py[oc]
 build/
-dist/
-samples/
 wheels/
 *.egg-info
 *.lock
@@ -14,3 +12,9 @@ wheels/
 
 # Output files
 output/
+
+# Frontend
+app/node_modules/
+app/dist/
+dist/
+samples/
