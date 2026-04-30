@@ -7,9 +7,11 @@ FunASR AutoModel 不支持 SenseVoice + SPK 原生串联 (需要 Paraformer 才�
 """
 
 import os
+import subprocess
 import time
 import logging
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Union
 
@@ -30,6 +32,59 @@ logger = logging.getLogger("winasr.pipeline")
 MIN_SPK_DURATION_S = 0.5
 
 
+def _detect_device(requested: str = "mps") -> str:
+    """
+    检测可用设备, 自动适配:
+    - MPS 可用 → GPU 加速, OMP_NUM_THREADS=1 (避免线程争抢)
+    - MPS 不可用 → CPU fallback, OMP_NUM_THREADS=核数 (吃满多核)
+    """
+    if requested == "mps":
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            logger.info("MPS (Apple Silicon GPU) 可用, 使用 GPU 加速")
+            os.environ["OMP_NUM_THREADS"] = "1"
+            os.environ["MKL_NUM_THREADS"] = "1"
+            return "mps"
+        else:
+            # CPU fallback: 用满多核
+            import multiprocessing
+            ncores = multiprocessing.cpu_count()
+            os.environ["OMP_NUM_THREADS"] = str(ncores)
+            os.environ["MKL_NUM_THREADS"] = str(ncores)
+            logger.warning("MPS 不可用, 回退到 CPU (%d 核)", ncores)
+            return "cpu"
+    return requested
+
+
+def _ensure_wav(audio_path: Path) -> Path:
+    """
+    非 WAV 格式预转码为 16kHz 单声道 WAV,
+    消除 torchaudio 运行时解码 m4a/mp3 的 CPU 开销
+    """
+    if audio_path.suffix.lower() == ".wav":
+        return audio_path
+
+    wav_path = Path(tempfile.mktemp(suffix=".wav", dir="/tmp", prefix="winasr_conv_"))
+    logger.info("Converting %s → WAV (16kHz mono)...", audio_path.name)
+    t0 = time.time()
+
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(audio_path),
+            "-ar", "16000", "-ac", "1",
+            "-loglevel", "error",
+            str(wav_path),
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg 转码失败: {result.stderr}")
+
+    elapsed = time.time() - t0
+    size_mb = wav_path.stat().st_size / 1024 / 1024
+    logger.info("转码完成: %.1fMB, %.1fs", size_mb, elapsed)
+    return wav_path
+
+
 class ASRPipeline:
     """FunASR 解耦式多模型级联 Pipeline"""
 
@@ -39,7 +94,7 @@ class ASRPipeline:
         max_segment_time: int = 30000,
         disable_update: bool = True,
     ):
-        self.device = device
+        self.device = _detect_device(device)
         self._max_segment_time = max_segment_time
         self._disable_update = disable_update
 
@@ -90,15 +145,15 @@ class ASRPipeline:
         self,
         audio_path: Union[str, Path],
         language: str = "zh",
-        batch_size_s: int = 300,
+        batch_size_s: int = 1200,
     ) -> TranscriptionResult:
         """
         转写音频文件, 返回结构化结果
 
         Args:
-            audio_path: 音频文件路径
+            audio_path: 音频文件路径 (支持 wav/mp3/m4a/flac)
             language: 语种 (auto/zh/en/yue/ja/ko)
-            batch_size_s: (保留参数, 解耦模式下未使用)
+            batch_size_s: ASR 批处理秒数 (M4 大内存可拉高到 1200+)
 
         Returns:
             TranscriptionResult
@@ -108,76 +163,119 @@ class ASRPipeline:
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-        logger.info("Transcribing: %s", audio_path.name)
+        logger.info("Transcribing: %s (language=%s, batch=%ds)", audio_path.name, language, batch_size_s)
         t0 = time.time()
 
-        # Step 1: VAD 切分
-        segments_ms = self._run_vad(audio_path)
-        logger.info("VAD found %d segments", len(segments_ms))
+        # Step 0: 非 WAV 预转码
+        wav_path = _ensure_wav(audio_path)
+        converted = wav_path != audio_path
 
-        # 加载音频
-        wav, sr = self._load_audio(audio_path)
+        try:
+            # Step 1: VAD 切分
+            segments_ms = self._run_vad(wav_path)
+            total = len(segments_ms)
+            logger.info("VAD found %d segments", total)
 
-        # Step 2: 逐段 ASR + 声纹提取
-        raw_segments = []
-        embeddings = []
+            if total == 0:
+                logger.warning("No speech segments found")
+                return TranscriptionResult(
+                    audio_file=audio_path.name,
+                    duration=0.0,
+                    num_speakers=0,
+                    segments=[],
+                )
 
-        for i, (start_ms, end_ms) in enumerate(segments_ms):
-            chunk_path = self._extract_chunk(wav, sr, start_ms, end_ms, i)
+            # 加载音频
+            wav, sr = self._load_audio(wav_path)
 
-            # ASR
-            text_raw = self._run_asr(chunk_path, language)
-            tags = parse_sensevoice_tags(text_raw)
+            # Step 2: 逐段 ASR + 声纹提取 (并行)
+            raw_segments = []
+            embeddings = []
+            t_seg = time.time()
+            _executor = ThreadPoolExecutor(max_workers=2)
 
-            # 声纹 (太短的片段跳过)
-            duration_s = (end_ms - start_ms) / 1000.0
-            emb = None
-            if duration_s >= MIN_SPK_DURATION_S:
-                emb = self._run_speaker_embedding(chunk_path)
+            for i, (start_ms, end_ms) in enumerate(segments_ms):
+                chunk_path = self._extract_chunk(wav, sr, start_ms, end_ms, i)
 
-            raw_segments.append({
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "tags": tags,
-                "emb_idx": len(embeddings) if emb is not None else None,
-            })
-            if emb is not None:
-                embeddings.append(emb)
+                # 声纹时长判断
+                duration_s = (end_ms - start_ms) / 1000.0
+                need_spk = duration_s >= MIN_SPK_DURATION_S
 
-            # 清理临时文件
-            os.unlink(chunk_path)
+                # ASR + 声纹 并行提交
+                future_asr = _executor.submit(self._run_asr, chunk_path, language, batch_size_s)
+                future_spk = _executor.submit(self._run_speaker_embedding, chunk_path) if need_spk else None
 
-        # Step 3: 声纹聚类
-        speaker_labels = self._cluster_speakers(embeddings, len(raw_segments), raw_segments)
+                # 等待结果
+                text_raw = future_asr.result()
+                tags = parse_sensevoice_tags(text_raw)
+                emb = future_spk.result() if future_spk is not None else None
 
-        # Step 4: 组装最终结果
-        segments = []
-        for i, seg in enumerate(raw_segments):
-            tags = seg["tags"]
-            segments.append(Segment(
-                start=seg["start_ms"] / 1000.0,
-                end=seg["end_ms"] / 1000.0,
-                text=tags["text"],
-                raw_text=tags["raw_text"],
-                speaker=speaker_labels[i],
-                emotion=tags["emotion"],
-                language=tags["language"],
-                events=tags["events"],
-            ))
+                raw_segments.append({
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "tags": tags,
+                    "emb_idx": len(embeddings) if emb is not None else None,
+                })
+                if emb is not None:
+                    embeddings.append(emb)
 
-        duration = segments[-1].end if segments else 0.0
-        speakers = set(s.speaker for s in segments)
+                # 清理临时文件
+                os.unlink(chunk_path)
 
-        elapsed = time.time() - t0
-        logger.info("Transcription done in %.1fs: %d segments, %d speakers",
-                     elapsed, len(segments), len(speakers))
+                # 进度日志 (每 50 段或最后一段)
+                if (i + 1) % 50 == 0 or i == total - 1:
+                    elapsed_s = time.time() - t_seg
+                    rtf = elapsed_s / (segments_ms[i][1] / 1000.0) if segments_ms[i][1] > 0 else 0
+                    logger.info(
+                        "  [%d/%d] %d%% | %.1fs elapsed | RTF=%.3f | last: %.20s",
+                        i + 1, total,
+                        int((i + 1) / total * 100),
+                        elapsed_s, rtf,
+                        tags["text"][:20],
+                    )
 
-        return TranscriptionResult(
-            audio_file=audio_path.name,
-            duration=duration,
-            num_speakers=len(speakers),
-            segments=segments,
-        )
+            _executor.shutdown(wait=False)
+
+            # Step 3: 声纹聚类
+            logger.info("Clustering %d speaker embeddings...", len(embeddings))
+            speaker_labels = self._cluster_speakers(embeddings, len(raw_segments), raw_segments)
+
+            # Step 4: 组装最终结果
+            segments = []
+            for i, seg in enumerate(raw_segments):
+                tags = seg["tags"]
+                segments.append(Segment(
+                    start=seg["start_ms"] / 1000.0,
+                    end=seg["end_ms"] / 1000.0,
+                    text=tags["text"],
+                    raw_text=tags["raw_text"],
+                    speaker=speaker_labels[i],
+                    emotion=tags["emotion"],
+                    language=tags["language"],
+                    events=tags["events"],
+                ))
+
+            duration = segments[-1].end if segments else 0.0
+            speakers = set(s.speaker for s in segments)
+
+            elapsed = time.time() - t0
+            logger.info(
+                "Done in %.1fs (%.1fx real-time): %d segments, %d speakers",
+                elapsed, duration / elapsed if elapsed > 0 else 0,
+                len(segments), len(speakers),
+            )
+
+            return TranscriptionResult(
+                audio_file=audio_path.name,
+                duration=duration,
+                num_speakers=len(speakers),
+                segments=segments,
+            )
+
+        finally:
+            # 清理转码临时文件
+            if converted and wav_path.exists():
+                wav_path.unlink()
 
     # ── 内部方法 ──────────────────────────────────────────────
 
@@ -208,13 +306,14 @@ class ASRPipeline:
         torchaudio.save(tmp.name, chunk, sr)
         return tmp.name
 
-    def _run_asr(self, chunk_path: str, language: str) -> str:
+    def _run_asr(self, chunk_path: str, language: str, batch_size_s: int = 1200) -> str:
         """SenseVoice ASR 推理, 返回原始文本 (含标签)"""
         res = self._asr_model.generate(
             input=chunk_path,
             language=language,
             use_itn=False,
             ban_emo_unk=False,
+            batch_size_s=batch_size_s,
         )
         if res and "text" in res[0]:
             return res[0]["text"]
