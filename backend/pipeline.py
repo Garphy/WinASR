@@ -281,7 +281,7 @@ class ASRPipeline:
 
     def _run_vad(self, audio_path: Path) -> list[tuple[int, int]]:
         """VAD 切分, 返回 [(start_ms, end_ms), ...]"""
-        res = self._vad_model.generate(input=str(audio_path))
+        res = self._vad_model.generate(input=str(audio_path), disable_pbar=True)
         if res and "value" in res[0]:
             return [tuple(seg) for seg in res[0]["value"]]
         return []
@@ -314,6 +314,7 @@ class ASRPipeline:
             use_itn=False,
             ban_emo_unk=False,
             batch_size_s=batch_size_s,
+            disable_pbar=True,
         )
         if res and "text" in res[0]:
             return res[0]["text"]
@@ -322,7 +323,7 @@ class ASRPipeline:
     def _run_speaker_embedding(self, chunk_path: str) -> Optional[np.ndarray]:
         """CAM++ 声纹特征提取, 返回 embedding ndarray"""
         try:
-            res = self._spk_model.generate(input=chunk_path)
+            res = self._spk_model.generate(input=chunk_path, disable_pbar=True)
             if res and "spk_embedding" in res[0]:
                 emb = res[0]["spk_embedding"]
                 if isinstance(emb, torch.Tensor):
