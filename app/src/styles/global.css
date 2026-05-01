@@ -66,10 +66,16 @@ body {
   flex-direction: column;
 }
 
-/* Pages that need padding get it via their own container */
-.app-main > *:not([data-fullscreen]) {
-  padding: 24px;
+/* 普通页面: 可滚动，有内边距 */
+.app-main > *:not(.full-page) {
+  flex: 1;
   overflow-y: auto;
+}
+
+/* 全屏页面 (WorkspacePage): 填满父容器 */
+.app-main > .full-page {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ── Buttons ── */

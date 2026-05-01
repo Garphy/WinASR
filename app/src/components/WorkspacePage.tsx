@@ -16,7 +16,7 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    flex: 1,
+    height: '100%',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     background: '#f7f8fa',
     overflow: 'hidden',
@@ -487,7 +487,7 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div style={styles.container} data-fullscreen>
+    <div style={styles.container} className="full-page">
       {/* Top bar */}
       <div style={styles.topBar}>
         <div style={styles.topBarLeft}>
