@@ -84,7 +84,8 @@ class FileStore:
         tmp = METADATA_FILE.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        tmp.rename(METADATA_FILE)
+        # os.replace 跨平台原子替换 (Path.rename 在 Windows 上不覆盖已存在文件)
+        os.replace(str(tmp), str(METADATA_FILE))
 
     def save_file(self, content: bytes, original_name: str, task_id: str) -> Path:
         """

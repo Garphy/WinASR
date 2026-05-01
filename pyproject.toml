@@ -17,4 +17,7 @@ dependencies = [
 ]
 
 [tool.uv]
+# CPU-only PyTorch (轻量安装，适用于无 GPU 或 macOS MPS)
+# 如需 CUDA 加速 (Windows/Linux NVIDIA GPU)，安装后手动替换：
+#   uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 extra-index-url = ["https://download.pytorch.org/whl/cpu"]

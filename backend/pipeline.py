@@ -4,14 +4,17 @@ WinASR 核心 Pipeline — 解耦式架构
 
 FunASR AutoModel 不支持 SenseVoice + SPK 原生串联 (需要 Paraformer 才有 timestamp)，
 因此采用解耦方案: VAD 先切分，再分别跑 ASR 和声纹，最后对齐融合。
+
+跨平台支持: macOS (MPS), Windows/Linux (CUDA), CPU fallback
 """
 
 import os
 import subprocess
+import sys
 import time
 import logging
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, Union
 
@@ -32,26 +35,51 @@ logger = logging.getLogger("winasr.pipeline")
 MIN_SPK_DURATION_S = 0.5
 
 
-def _detect_device(requested: str = "mps") -> str:
+def _detect_device(requested: str = "auto") -> str:
     """
-    检测可用设备, 自动适配:
-    - MPS 可用 → GPU 加速, OMP_NUM_THREADS=1 (避免线程争抢)
-    - MPS 不可用 → CPU fallback, OMP_NUM_THREADS=核数 (吃满多核)
+    自动检测最佳设备, 优先级: CUDA → MPS → CPU
+
+    - CUDA (Windows/Linux NVIDIA GPU) → 单线程, GPU 加速
+    - MPS (macOS Apple Silicon) → 单线程, GPU 加速
+    - CPU fallback → 多核并行
+
+    Args:
+        requested: "auto" 自动检测, 或 "cuda"/"mps"/"cpu" 指定
     """
-    if requested == "mps":
+    if requested == "auto":
+        # 优先 CUDA (Windows/Linux)
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info("CUDA 可用: %s, 使用 GPU 加速", gpu_name)
+            os.environ["OMP_NUM_THREADS"] = "1"
+            os.environ["MKL_NUM_THREADS"] = "1"
+            return "cuda"
+        # 其次 MPS (macOS)
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             logger.info("MPS (Apple Silicon GPU) 可用, 使用 GPU 加速")
             os.environ["OMP_NUM_THREADS"] = "1"
             os.environ["MKL_NUM_THREADS"] = "1"
             return "mps"
-        else:
-            # CPU fallback: 用满多核
-            import multiprocessing
-            ncores = multiprocessing.cpu_count()
-            os.environ["OMP_NUM_THREADS"] = str(ncores)
-            os.environ["MKL_NUM_THREADS"] = str(ncores)
-            logger.warning("MPS 不可用, 回退到 CPU (%d 核)", ncores)
-            return "cpu"
+        # CPU fallback
+        import multiprocessing
+        ncores = multiprocessing.cpu_count()
+        os.environ["OMP_NUM_THREADS"] = str(ncores)
+        os.environ["MKL_NUM_THREADS"] = str(ncores)
+        logger.warning("无可用 GPU, 回退到 CPU (%d 核)", ncores)
+        return "cpu"
+
+    # 用户指定了具体设备
+    if requested == "cuda" and not torch.cuda.is_available():
+        logger.warning("请求 CUDA 但不可用, 自动降级")
+        return _detect_device("auto")
+    if requested == "mps":
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            os.environ["OMP_NUM_THREADS"] = "1"
+            os.environ["MKL_NUM_THREADS"] = "1"
+            return "mps"
+        logger.warning("请求 MPS 但不可用, 自动降级")
+        return _detect_device("auto")
+
     return requested
 
 
@@ -63,7 +91,8 @@ def _ensure_wav(audio_path: Path) -> Path:
     if audio_path.suffix.lower() == ".wav":
         return audio_path
 
-    wav_path = Path(tempfile.mktemp(suffix=".wav", dir="/tmp", prefix="winasr_conv_"))
+    # 不指定 dir — 使用系统临时目录（跨平台兼容）
+    wav_path = Path(tempfile.mktemp(suffix=".wav", prefix="winasr_conv_"))
     logger.info("Converting %s → WAV (16kHz mono)...", audio_path.name)
     t0 = time.time()
 
@@ -74,7 +103,10 @@ def _ensure_wav(audio_path: Path) -> Path:
             "-loglevel", "error",
             str(wav_path),
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 转码失败: {result.stderr}")
@@ -90,7 +122,7 @@ class ASRPipeline:
 
     def __init__(
         self,
-        device: str = "mps",
+        device: str = "auto",
         max_segment_time: int = 30000,
         disable_update: bool = True,
     ):
@@ -153,7 +185,7 @@ class ASRPipeline:
         Args:
             audio_path: 音频文件路径 (支持 wav/mp3/m4a/flac)
             language: 语种 (auto/zh/en/yue/ja/ko)
-            batch_size_s: ASR 批处理秒数 (M4 大内存可拉高到 1200+)
+            batch_size_s: ASR 批处理秒数 (大内存可拉高到 1200+)
 
         Returns:
             TranscriptionResult
@@ -221,8 +253,13 @@ class ASRPipeline:
                 if emb is not None:
                     embeddings.append(emb)
 
-                # 清理临时文件
-                os.unlink(chunk_path)
+                # 清理临时文件 (Windows 兼容: 忽略 PermissionError)
+                try:
+                    os.unlink(chunk_path)
+                except PermissionError:
+                    logger.debug("Could not delete temp file (locked): %s", chunk_path)
+                except OSError:
+                    pass
 
                 # 进度日志 (每 50 段或最后一段)
                 if (i + 1) % 50 == 0 or i == total - 1:
@@ -281,7 +318,10 @@ class ASRPipeline:
         finally:
             # 清理转码临时文件
             if converted and wav_path.exists():
-                wav_path.unlink()
+                try:
+                    wav_path.unlink()
+                except PermissionError:
+                    logger.debug("Could not delete converted WAV (locked): %s", wav_path)
 
     # ── 内部方法 ──────────────────────────────────────────────
 
@@ -327,10 +367,12 @@ class ASRPipeline:
         start_sample = int(start_ms / 1000 * sr)
         end_sample = int(end_ms / 1000 * sr)
         chunk = wav[:, start_sample:end_sample]
+        # 不指定 dir — 使用系统临时目录（跨平台兼容）
         tmp = tempfile.NamedTemporaryFile(
-            delete=False, suffix=".wav", dir="/tmp", prefix=f"winasr_{idx}_"
+            delete=False, suffix=".wav", prefix=f"winasr_{idx}_"
         )
         torchaudio.save(tmp.name, chunk, sr)
+        tmp.close()
         return tmp.name
 
     def _run_asr(self, chunk_path: str, language: str, batch_size_s: int = 1200) -> str:
@@ -426,7 +468,7 @@ class ASRPipeline:
 _pipeline: Optional[ASRPipeline] = None
 
 
-def get_pipeline(device: str = "mps") -> ASRPipeline:
+def get_pipeline(device: str = "auto") -> ASRPipeline:
     """获取全局 Pipeline 单例"""
     global _pipeline
     if _pipeline is None:

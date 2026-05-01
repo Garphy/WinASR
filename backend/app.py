@@ -7,7 +7,6 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import json
 import uuid
-import shutil
 import tempfile
 import logging
 from datetime import datetime, timezone

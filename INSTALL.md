@@ -4,12 +4,18 @@
 
 | 依赖 | 版本要求 | 用途 |
 |------|----------|------|
-| macOS | 14+ (Apple Silicon) | MPS GPU 加速 |
 | Python | 3.12+ | 后端运行时 |
 | Node.js | 20+ (LTS) | 前端构建 |
 | pnpm | 9+ | 前端包管理 |
 | uv | 最新版 | Python 依赖管理 |
 | ffmpeg | 最新版 | 音频格式转码 |
+
+**GPU 加速（可选）：**
+
+| 平台 | GPU | 说明 |
+|------|-----|------|
+| macOS (Apple Silicon) | MPS | 自动检测，无需额外配置 |
+| Windows/Linux (NVIDIA) | CUDA | 需安装 CUDA 版 PyTorch（见下方） |
 
 ## 1. 安装基础工具
 
@@ -62,12 +68,26 @@ uv sync
 
 uv 会自动创建 `.venv` 并安装 Python 3.12 + 所有依赖。
 
-验证 MPS：
+验证 GPU：
 
 ```bash
-.venv/bin/python -c "import torch; print(torch.backends.mps.is_available())"
-# 应输出 True
+.venv/bin/python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, MPS: {torch.backends.mps.is_available() if hasattr(torch.backends, \"mps\") else False})'
 ```
+
+### Windows + NVIDIA GPU（CUDA 加速）
+
+默认安装的是 CPU 版 PyTorch。如需 CUDA 加速：
+
+```bash
+cd ~/WinASR
+.venv/bin/uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+> 需要先安装 [NVIDIA CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive) 和对应 cuDNN。
+
+### macOS（MPS 加速）
+
+macOS Apple Silicon 自动使用 MPS，无需额外配置。
 
 ## 4. 前端安装
 
