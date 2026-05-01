@@ -8,7 +8,7 @@ export default function App() {
     <BrowserRouter>
       <div className="app-shell">
         <header className="app-header">
-          <h1 className="app-title">WinASR</h1>
+          <h1 className="app-title"><a href="/tasks" style={{ color: 'inherit', textDecoration: 'none' }}>WinASR</a></h1>
           <span className="app-subtitle">Audio Transcription &amp; Editor</span>
         </header>
         <main className="app-main">

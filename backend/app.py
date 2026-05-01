@@ -44,6 +44,13 @@ app = FastAPI(
     version="0.2.0",
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """启动时加载持久化的任务数据"""
+    _load_tasks()
+    logger.info("Startup: loaded %d tasks", len(task_store))
+
 # ── CORS 中间件 ──────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -57,8 +64,58 @@ app.add_middleware(
 OUTPUT_DIR = Path(os.getenv("WINASR_OUTPUT_DIR", Path.home() / "WinASR" / "output"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── 任务管理 (内存 dict + 自动清理) ──────────────────────────
+# ── 任务管理 (内存 dict + 持久化 + 自动清理) ──────────────────
+TASKS_FILE = OUTPUT_DIR / "tasks.json"
 task_store: Dict[str, TaskStatus] = {}
+
+
+def _save_tasks():
+    """持久化任务元数据到 tasks.json"""
+    data = []
+    for task in task_store.values():
+        d = {
+            "task_id": task.task_id,
+            "state": task.state.value,
+            "filename": task.filename,
+            "progress": task.progress,
+            "created_at": task.created_at,
+            "completed_at": task.completed_at,
+            "error": task.error,
+        }
+        data.append(d)
+    data.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+    tmp = TASKS_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(str(tmp), str(TASKS_FILE))
+
+
+def _load_tasks():
+    """从 tasks.json 加载任务元数据（不含 result，结果从磁盘 JSON 按需加载）"""
+    if not TASKS_FILE.exists():
+        return
+    try:
+        with open(TASKS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for d in data:
+            task = TaskStatus(
+                task_id=d["task_id"],
+                state=TaskState(d["state"]),
+                filename=d["filename"],
+                progress=d.get("progress", 1.0),
+                created_at=d.get("created_at"),
+                completed_at=d.get("completed_at"),
+                error=d.get("error"),
+            )
+            # 尝试从磁盘加载结果
+            if task.state == TaskState.completed:
+                result_file = OUTPUT_DIR / f"{task.task_id}.json"
+                if result_file.exists():
+                    task.result = {"_loaded": True}  # 标记有结果，按需加载
+            task_store[task.task_id] = task
+        logger.info("Loaded %d tasks from %s", len(task_store), TASKS_FILE)
+    except Exception as e:
+        logger.warning("Failed to load tasks: %s", e)
 
 
 def _cleanup_old_tasks():
@@ -79,6 +136,7 @@ def _cleanup_old_tasks():
             result_file = OUTPUT_DIR / f"{tid}.json"
             if result_file.exists():
                 result_file.unlink(missing_ok=True)
+    _save_tasks()
 
 
 def _process_task(task_id: str, file_path: str, filename: str, language: str) -> None:
@@ -115,12 +173,14 @@ def _process_task(task_id: str, file_path: str, filename: str, language: str) ->
         task.progress = 1.0
         task.result = result.to_dict()
         task.completed_at = now
+        _save_tasks()
         logger.info("[task %s] Completed: %s (%d segments)", task_id, filename, len(result.segments))
 
     except Exception as e:
         logger.exception("[task %s] Failed: %s", task_id, e)
         task.state = TaskState.failed
         task.error = str(e)
+        _save_tasks()
 
     finally:
         # pipeline.transcribe() 内部已清理转码临时文件
@@ -226,6 +286,7 @@ async def create_task(
         created_at=now,
     )
     task_store[task_id] = task
+    _save_tasks()
 
     # 提交后台任务
     background_tasks.add_task(_process_task, task_id, str(file_path), filename, language)
@@ -259,22 +320,27 @@ async def get_task(task_id: str):
 async def get_task_result(task_id: str):
     """获取任务转写结果"""
     task = task_store.get(task_id)
-    if task is None:
-        # 尝试从磁盘加载（任务可能已被内存清理）
+    if task is None or task.state != TaskState.completed:
+        # 直接从磁盘加载
         output_file = OUTPUT_DIR / f"{task_id}.json"
         if output_file.exists():
             with open(output_file, "r", encoding="utf-8") as f:
                 return JSONResponse(content=json.load(f))
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    if task.state != TaskState.completed:
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
         raise HTTPException(status_code=400, detail=f"Task not completed (state={task.state.value})")
-    if task.result is None:
-        output_file = OUTPUT_DIR / f"{task_id}.json"
-        if output_file.exists():
-            with open(output_file, "r", encoding="utf-8") as f:
-                return JSONResponse(content=json.load(f))
-        raise HTTPException(status_code=404, detail="Result file not found")
-    return JSONResponse(content=task.result)
+
+    # 优先从磁盘加载（result 可能是持久化标记或 None）
+    output_file = OUTPUT_DIR / f"{task_id}.json"
+    if output_file.exists():
+        with open(output_file, "r", encoding="utf-8") as f:
+            return JSONResponse(content=json.load(f))
+
+    # 回退到内存中的 result
+    if task.result and "_loaded" not in task.result:
+        return JSONResponse(content=task.result)
+
+    raise HTTPException(status_code=404, detail="Result file not found")
 
 
 @app.get("/api/tasks/{task_id}/audio")
