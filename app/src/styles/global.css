@@ -63,6 +63,7 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  background: #fff;
 }
 
 /* WorkspacePage: 全屏填满，覆盖 padding */
@@ -74,7 +75,6 @@ body {
 /* 有全屏页面时父容器不滚动 */
 .app-main:has(> .full-page) {
   overflow: hidden;
-  padding: 0;
 }
 
 /* ── Buttons ── */
