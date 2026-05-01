@@ -18,9 +18,9 @@ export function exportAsText(result: TranscriptionResult): string {
 
 export function exportAsMarkdown(result: TranscriptionResult): string {
   const lines: string[] = [];
-  lines.push(`# Transcription — Task ${result.taskId}`);
+  lines.push(`# Transcription — ${result.audioFile}`);
   lines.push('');
-  lines.push(`Duration: ${formatTimestamp(result.metadata.duration)}`);
+  lines.push(`Duration: ${formatTimestamp(result.duration)}`);
   lines.push('');
 
   for (const seg of result.segments) {

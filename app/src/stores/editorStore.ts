@@ -143,15 +143,6 @@ export const useEditorStore = create<EditorState>()(
       set((state) => {
         pushHistory(state);
         state.speakerMap[spkId] = name;
-        // Also update speaker field on all matching segments
-        if (state.result) {
-          for (const seg of state.result.segments) {
-            if (seg.speaker === spkId) {
-              seg.speaker = name;
-              seg.isModified = true;
-            }
-          }
-        }
       });
     },
 

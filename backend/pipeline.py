@@ -286,10 +286,10 @@ class ASRPipeline:
     # ── 内部方法 ──────────────────────────────────────────────
 
     @staticmethod
-    def _generate_peaks(wav_path: Path, chunk_size: int = 1024) -> list[dict]:
+    def _generate_peaks(wav_path: Path, chunk_size: int = 1024) -> list[float]:
         """
-        从 WAV 文件读取音频数据, 按 chunk_size 采样点计算每段的 min/max 幅度值.
-        返回 [{"min": float, "max": float}, ...] 数组, 用于前端波形绘制.
+        从 WAV 文件读取音频数据, 按 chunk_size 采样点计算每段的 max 幅度值.
+        返回 [float, ...] flat array, 用于前端波形绘制.
         """
         try:
             wav, sr = torchaudio.load(str(wav_path))
@@ -300,10 +300,7 @@ class ASRPipeline:
                 chunk = samples[i:i + chunk_size]
                 if len(chunk) == 0:
                     break
-                peaks.append({
-                    "min": float(chunk.min()),
-                    "max": float(chunk.max()),
-                })
+                peaks.append(float(abs(chunk).max()))
             return peaks
         except Exception as e:
             logger.warning("Failed to generate peaks: %s", e)

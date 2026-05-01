@@ -191,10 +191,7 @@ export default function UploadPage() {
     }, 300);
 
     try {
-      // Note: Current API only accepts File. Language preference is stored in UI
-      // and may need backend API extension to pass through.
-      void language; // reserved for future API integration
-      await createTask(file);
+      await createTask(file, language);
       clearInterval(progressInterval);
       setProgress(100);
       // Brief delay so user sees completion

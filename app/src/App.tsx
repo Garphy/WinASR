@@ -14,8 +14,16 @@ export default function App() {
         <main className="app-main">
           <Routes>
             <Route path="/" element={<TaskListPage />} />
+            <Route path="/tasks" element={<TaskListPage />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/task/:taskId" element={<WorkspacePage />} />
+            <Route path="*" element={
+              <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>🔍</div>
+                <p>页面不存在</p>
+                <a href="/" style={{ color: '#4361ee' }}>返回首页</a>
+              </div>
+            } />
           </Routes>
         </main>
       </div>

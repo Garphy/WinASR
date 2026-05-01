@@ -11,7 +11,7 @@ interface TaskState {
 
   fetchTasks: () => Promise<void>;
   fetchTask: (id: string) => Promise<void>;
-  createTask: (file: File) => Promise<Task>;
+  createTask: (file: File, language?: string) => Promise<Task>;
   setCurrentTask: (task: Task | null) => void;
   startPolling: () => void;
   stopPolling: () => void;
@@ -70,12 +70,12 @@ export const useTaskStore = create<TaskState>()(
       }
     },
 
-    createTask: async (file: File) => {
+    createTask: async (file: File, language?: string) => {
       set((state) => {
         state.isLoading = true;
       });
       try {
-        const task = await api.uploadAudio(file);
+        const task = await api.uploadAudio(file, language);
         set((state) => {
           state.tasks.unshift(task);
           state.currentTask = task;

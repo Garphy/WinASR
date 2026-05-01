@@ -149,7 +149,7 @@ function TaskRow({ task }: { task: Task }) {
 
   const handleClick = useCallback(() => {
     if (isCompleted) {
-      navigate(`/workspace/${task.id}`);
+      navigate(`/task/${task.id}`);
     }
   }, [isCompleted, navigate, task.id]);
 

@@ -6,6 +6,7 @@ from typing import List, Optional
 from enum import Enum
 import json
 import re
+import uuid
 
 
 class TaskState(str, Enum):
@@ -26,6 +27,7 @@ class TaskStatus:
     result: Optional[dict] = None  # TranscriptionResult dict when completed
     error: Optional[str] = None    # 错误信息 when failed
     created_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -40,19 +42,22 @@ class TaskStatus:
             d["error"] = self.error
         if self.created_at is not None:
             d["created_at"] = self.created_at
+        if self.completed_at is not None:
+            d["completed_at"] = self.completed_at
         return d
 
 
 @dataclass
 class Segment:
     """单个语音片段"""
-    start: float          # 起始时间 (秒)
-    end: float            # 结束时间 (秒)
-    text: str             # 识别文本 (已清洗标签)
-    raw_text: str         # 原始文本 (含 SenseVoice 标签)
-    speaker: str          # 说话人 ID, 如 "SPEAKER_0"
-    emotion: str          # 情绪标签: HAPPY/SAD/ANGRY/NEUTRAL/UNKNOWN
-    language: str          # 语种标签: zh/en/yue/ja/ko
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    start: float = 0.0        # 起始时间 (秒)
+    end: float = 0.0          # 结束时间 (秒)
+    text: str = ""            # 识别文本 (已清洗标签)
+    raw_text: str = ""        # 原始文本 (含 SenseVoice 标签)
+    speaker: str = ""         # 说话人 ID, 如 "SPEAKER_0"
+    emotion: str = ""         # 情绪标签: HAPPY/SAD/ANGRY/NEUTRAL/UNKNOWN
+    language: str = ""        # 语种标签: zh/en/yue/ja/ko
     events: List[str] = field(default_factory=list)  # 声音事件: Speech/BGM/Applause 等
 
 
@@ -63,7 +68,7 @@ class TranscriptionResult:
     duration: float                        # 音频总时长 (秒)
     num_speakers: int                      # 识别到的说话人数量
     segments: List[Segment]                # 所有语音片段
-    peaks: List[dict] = field(default_factory=list)  # 波形峰值数据 [{min, max}, ...]
+    peaks: List[float] = field(default_factory=list)  # 波形峰值 (flat array)
     model_info: dict = field(default_factory=lambda: {
         "asr": "SenseVoiceSmall",
         "vad": "fsmn-vad",

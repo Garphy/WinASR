@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { TranscriptionResult } from '../types';
 import { exportAsText, exportAsMarkdown, downloadFile } from '../utils/export';
+import { useEditorStore } from '../stores/editorStore';
 
 interface ExportMenuProps {
   result: TranscriptionResult;
@@ -55,6 +56,7 @@ const styles: Record<string, React.CSSProperties> = {
 export default function ExportMenu({ result, taskId }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const speakerMap = useEditorStore((s) => s.speakerMap);
 
   // Close on outside click
   useEffect(() => {
@@ -68,17 +70,20 @@ export default function ExportMenu({ result, taskId }: ExportMenuProps) {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // 合并 speakerMap：优先使用用户修改后的名称
+  const mergedResult = { ...result, speakerMap };
+
   const handleExportText = useCallback(() => {
-    const content = exportAsText(result);
+    const content = exportAsText(mergedResult);
     downloadFile(content, `transcription-${taskId}.txt`, 'text/plain');
     setOpen(false);
-  }, [result, taskId]);
+  }, [mergedResult, taskId]);
 
   const handleExportMarkdown = useCallback(() => {
-    const content = exportAsMarkdown(result);
+    const content = exportAsMarkdown(mergedResult);
     downloadFile(content, `transcription-${taskId}.md`, 'text/markdown');
     setOpen(false);
-  }, [result, taskId]);
+  }, [mergedResult, taskId]);
 
   return (
     <div ref={wrapperRef} style={styles.wrapper}>

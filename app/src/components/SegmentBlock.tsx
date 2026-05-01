@@ -1,5 +1,6 @@
-import { memo, useState, useRef, useCallback } from 'react';
+import { memo, useState, useRef, useCallback, useEffect } from 'react';
 import type { Segment } from '../types';
+import { useEditorStore } from '../stores/editorStore';
 
 const EMOTION_EMOJI: Record<string, string> = {
   neutral: '😐',
@@ -38,6 +39,17 @@ function SegmentBlockInner({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(segment.text);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const startEditing = useEditorStore((s) => s.startEditing);
+  const stopEditing = useEditorStore((s) => s.stopEditing);
+
+  // Sync local editing state with store
+  useEffect(() => {
+    if (editing) {
+      startEditing();
+    } else {
+      stopEditing();
+    }
+  }, [editing, startEditing, stopEditing]);
 
   const handleDoubleClick = useCallback(() => {
     setDraft(segment.text);

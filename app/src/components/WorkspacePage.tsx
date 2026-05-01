@@ -16,7 +16,7 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    height: '100vh',
+    flex: 1,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     background: '#f7f8fa',
     overflow: 'hidden',
@@ -140,7 +140,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    height: '100vh',
+    flex: 1,
     fontSize: 16,
     color: '#888',
   },
@@ -149,7 +149,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column' as const,
     alignItems: 'center',
     justifyContent: 'center',
-    height: '100vh',
+    flex: 1,
     fontSize: 15,
     color: '#e63946',
     gap: 12,
@@ -175,7 +175,7 @@ export default function WorkspacePage() {
   const navigate = useNavigate();
 
   const result = useEditorStore((s) => s.result);
-  const segments = useEditorStore((s) => s.result?.segments ?? []);
+  const segments = result?.segments ?? [];
   const speakerMap = useEditorStore((s) => s.speakerMap);
   const activeSegmentId = useEditorStore((s) => s.activeSegmentId);
   const isPlaying = useEditorStore((s) => s.isPlaying);
@@ -253,10 +253,12 @@ export default function WorkspacePage() {
       try {
         setLoading(true);
         setError(null);
+        console.log(`[WorkspacePage] Loading task ${taskId}...`);
 
         // Fetch task info for filename
         const task = await api.getTask(taskId!);
         if (cancelled) return;
+        console.log(`[WorkspacePage] Task loaded:`, task);
         setTaskFilename(task.filename);
 
         // Try loading draft first
@@ -265,16 +267,22 @@ export default function WorkspacePage() {
 
         if (!hasDraft) {
           // No draft — load from server
+          console.log(`[WorkspacePage] Loading result for ${taskId}...`);
           const data = await api.getTaskResult(taskId!);
           if (cancelled) return;
+          console.log(`[WorkspacePage] Result loaded:`, data.segments?.length, 'segments');
           setResult(data);
+        } else {
+          console.log(`[WorkspacePage] Loaded from draft`);
         }
 
         setCurrentDraftId(taskId!);
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : '加载失败');
+        const msg = err instanceof Error ? err.message : '加载失败';
+        console.error(`[WorkspacePage] Load failed:`, msg);
+        setError(msg);
         setLoading(false);
       }
     }
@@ -297,7 +305,6 @@ export default function WorkspacePage() {
       cursorColor: '#3a0ca3',
       height: 80,
       normalize: true,
-      backend: 'WebAudio',
     });
 
     // Load audio with peaks if available
@@ -480,7 +487,7 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} data-fullscreen>
       {/* Top bar */}
       <div style={styles.topBar}>
         <div style={styles.topBarLeft}>
@@ -508,7 +515,7 @@ export default function WorkspacePage() {
             {playbackSpeed}x
           </button>
           <span style={styles.timeDisplay}>
-            {formatTime(currentTime)} / {formatTime(result.metadata.duration)}
+            {formatTime(currentTime)} / {formatTime(result.duration)}
           </span>
         </div>
       </div>

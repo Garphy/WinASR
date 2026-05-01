@@ -15,22 +15,20 @@ export interface Segment {
   start: number;
   end: number;
   text: string;
+  rawText: string;
   emotion: string;
   language: string;
+  events: string[];
   isModified: boolean;
 }
 
 export type SpeakerMap = Record<string, string>;
 
-export interface AudioMetadata {
-  duration: number;
-  sampleRate: number;
-}
-
 export interface TranscriptionResult {
-  taskId: string;
-  metadata: AudioMetadata;
-  speakerMap: SpeakerMap;
+  audioFile: string;
+  duration: number;
+  numSpeakers: number;
   segments: Segment[];
   peaks: number[];
+  speakerMap: SpeakerMap;
 }

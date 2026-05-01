@@ -15,15 +15,29 @@ from pathlib import Path
 from typing import Dict
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.pipeline import get_pipeline
 from backend.schema import TranscriptionResult, TaskStatus, TaskState
+from backend.file_store import get_file_store
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# ── Debug 模式 ───────────────────────────────────────────────
+DEBUG = os.getenv("WINASR_DEBUG", "0").lower() in ("1", "true", "yes")
+
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 logger = logging.getLogger("winasr.app")
+if DEBUG:
+    logger.setLevel(logging.DEBUG)
+    logger.debug("Debug mode enabled (WINASR_DEBUG=1)")
+
+# ── 常量 ──────────────────────────────────────────────────────
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500MB
+MAX_TASKS_IN_MEMORY = 100            # 保留最近 N 条任务
 
 app = FastAPI(
     title="WinASR",
@@ -35,7 +49,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,62 +58,93 @@ app.add_middleware(
 OUTPUT_DIR = Path(os.getenv("WINASR_OUTPUT_DIR", Path.home() / "WinASR" / "output"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 上传文件暂存目录
-UPLOAD_DIR = OUTPUT_DIR / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-# ── 任务管理 (Phase 1: 内存 dict) ────────────────────────────
+# ── 任务管理 (内存 dict + 自动清理) ──────────────────────────
 task_store: Dict[str, TaskStatus] = {}
 
 
-def _process_task(task_id: str, tmp_path: str, filename: str, language: str) -> None:
+def _cleanup_old_tasks():
+    """保留最近 MAX_TASKS_IN_MEMORY 条任务，清理旧的"""
+    if len(task_store) <= MAX_TASKS_IN_MEMORY:
+        return
+    # 按 created_at 排序，删除最旧的
+    sorted_ids = sorted(
+        task_store.keys(),
+        key=lambda tid: task_store[tid].created_at or "",
+    )
+    to_remove = sorted_ids[: len(sorted_ids) - MAX_TASKS_IN_MEMORY]
+    for tid in to_remove:
+        task = task_store.pop(tid, None)
+        if task:
+            logger.info("[task %s] Cleaned up (old task)", tid)
+            # 清理结果 JSON
+            result_file = OUTPUT_DIR / f"{tid}.json"
+            if result_file.exists():
+                result_file.unlink(missing_ok=True)
+
+
+def _process_task(task_id: str, file_path: str, filename: str, language: str) -> None:
     """后台任务: 执行转写并更新 task_store"""
     task = task_store.get(task_id)
     if task is None:
+        logger.warning("[task %s] Not found in task_store, skipping", task_id)
         return
 
     task.state = TaskState.processing
     task.progress = 0.1
+    logger.info("[task %s] Processing started: %s (lang=%s)", task_id, filename, language)
+    if DEBUG:
+        logger.debug("[task %s] file_path=%s, file_size=%s", task_id, file_path,
+                     os.path.getsize(file_path) if os.path.exists(file_path) else "N/A")
 
     try:
         pipeline = get_pipeline()
-        result = pipeline.transcribe(audio_path=tmp_path, language=language)
+        if DEBUG:
+            logger.debug("[task %s] Pipeline loaded, device=%s", task_id, pipeline.device)
+
+        result = pipeline.transcribe(audio_path=file_path, language=language)
+        if DEBUG:
+            logger.debug("[task %s] Transcription done: %d segments, %.1fs duration",
+                         task_id, len(result.segments), result.duration)
 
         # 保存结果到文件
         output_file = OUTPUT_DIR / f"{task_id}.json"
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(result.to_json())
 
+        now = datetime.now(timezone.utc).isoformat()
         task.state = TaskState.completed
         task.progress = 1.0
         task.result = result.to_dict()
-        logger.info("Task %s completed: %s", task_id, filename)
+        task.completed_at = now
+        logger.info("[task %s] Completed: %s (%d segments)", task_id, filename, len(result.segments))
 
     except Exception as e:
-        logger.exception("Task %s failed: %s", task_id, e)
+        logger.exception("[task %s] Failed: %s", task_id, e)
         task.state = TaskState.failed
         task.error = str(e)
 
     finally:
-        # 清理临时文件
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        # pipeline.transcribe() 内部已清理转码临时文件
+        # 音频文件由 FileStore 管理，不在这里删除
+        _cleanup_old_tasks()
 
 
-# ── 原有端点 ─────────────────────────────────────────────────
+# ── 端点 ──────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
     return {
         "service": "WinASR",
         "version": "0.2.0",
+        "debug": DEBUG,
         "endpoints": {
             "POST /transcribe": "上传音频文件进行转写 (同步)",
             "POST /api/tasks": "创建异步转写任务",
             "GET /api/tasks": "列出所有任务",
             "GET /api/tasks/{task_id}": "查询任务状态",
+            "GET /api/tasks/{task_id}/result": "获取转写结果",
+            "GET /api/tasks/{task_id}/audio": "获取音频文件",
+            "GET /api/files": "列出所有文件记录",
             "GET /health": "健康检查",
         },
     }
@@ -112,6 +157,7 @@ async def health():
         "status": "ok",
         "model_loaded": pipeline.is_loaded,
         "device": pipeline.device,
+        "debug": DEBUG,
     }
 
 
@@ -123,22 +169,20 @@ async def transcribe(
 ):
     """
     上传音频文件, 返回转写结果 (同步)
-
-    返回包含: 每个语音段的时间戳、文本、说话人ID、情绪标签、语种、波形峰值
     """
-    # 保存上传文件到临时目录
-    suffix = Path(file.filename).suffix or ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"文件过大，最大支持 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+
+    filename = file.filename or "unknown.wav"
+    # 保存到 FileStore（MD5 去重）
+    file_path = get_file_store().save_file(content, filename, "sync_" + uuid.uuid4().hex[:8])
 
     try:
         pipeline = get_pipeline()
-        result = pipeline.transcribe(audio_path=tmp_path, language=language)
+        result = pipeline.transcribe(audio_path=str(file_path), language=language)
 
-        # 保存结果到文件
-        output_file = OUTPUT_DIR / f"{Path(file.filename).stem}.json"
+        output_file = OUTPUT_DIR / f"{Path(filename).stem}.json"
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(result.to_json())
 
@@ -151,11 +195,8 @@ async def transcribe(
         logger.exception("Transcription failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-    finally:
-        os.unlink(tmp_path)
 
-
-# ── Phase 1: 异步任务 API ────────────────────────────────────
+# ── 异步任务 API ────────────────────────────────────────────
 
 @app.post("/api/tasks")
 async def create_task(
@@ -166,15 +207,15 @@ async def create_task(
     """
     创建异步转写任务: 上传文件 → 返回 task_id → 后台处理 → 前端轮询
     """
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"文件过大，最大支持 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+
     task_id = uuid.uuid4().hex[:12]
     filename = file.filename or "unknown.wav"
 
-    # 保存上传文件
-    suffix = Path(filename).suffix or ".wav"
-    tmp_path = str(UPLOAD_DIR / f"{task_id}{suffix}")
-    content = await file.read()
-    with open(tmp_path, "wb") as f:
-        f.write(content)
+    # 保存文件（MD5 去重，永久保存）
+    file_path = get_file_store().save_file(content, filename, task_id)
 
     # 创建任务记录
     now = datetime.now(timezone.utc).isoformat()
@@ -188,8 +229,9 @@ async def create_task(
     task_store[task_id] = task
 
     # 提交后台任务
-    background_tasks.add_task(_process_task, task_id, tmp_path, filename, language)
-    logger.info("Task %s created for file: %s", task_id, filename)
+    background_tasks.add_task(_process_task, task_id, str(file_path), filename, language)
+    logger.info("[task %s] Created for file: %s (size=%d bytes, path=%s)",
+                task_id, filename, len(content), file_path)
 
     return JSONResponse(status_code=202, content=task.to_dict())
 
@@ -197,8 +239,8 @@ async def create_task(
 @app.get("/api/tasks")
 async def list_tasks():
     """列出所有任务"""
+    _cleanup_old_tasks()
     tasks = [task.to_dict() for task in task_store.values()]
-    # 按创建时间降序排列
     tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return JSONResponse(content=tasks)
 
@@ -209,7 +251,60 @@ async def get_task(task_id: str):
     task = task_store.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    if DEBUG:
+        logger.debug("[task %s] Status query: state=%s, progress=%.2f", task_id, task.state.value, task.progress)
     return JSONResponse(content=task.to_dict())
+
+
+@app.get("/api/tasks/{task_id}/result")
+async def get_task_result(task_id: str):
+    """获取任务转写结果"""
+    task = task_store.get(task_id)
+    if task is None:
+        # 尝试从磁盘加载（任务可能已被内存清理）
+        output_file = OUTPUT_DIR / f"{task_id}.json"
+        if output_file.exists():
+            with open(output_file, "r", encoding="utf-8") as f:
+                return JSONResponse(content=json.load(f))
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    if task.state != TaskState.completed:
+        raise HTTPException(status_code=400, detail=f"Task not completed (state={task.state.value})")
+    if task.result is None:
+        output_file = OUTPUT_DIR / f"{task_id}.json"
+        if output_file.exists():
+            with open(output_file, "r", encoding="utf-8") as f:
+                return JSONResponse(content=json.load(f))
+        raise HTTPException(status_code=404, detail="Result file not found")
+    return JSONResponse(content=task.result)
+
+
+@app.get("/api/tasks/{task_id}/audio")
+async def get_task_audio(task_id: str):
+    """获取任务对应的音频文件（用于波形播放）"""
+    file_path = get_file_store().get_file_path(task_id)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    original_name = get_file_store().get_original_name(task_id) or "audio"
+    suffix = file_path.suffix.lower()
+    media_type = "audio/wav"
+    if suffix == ".mp3":
+        media_type = "audio/mpeg"
+    elif suffix == ".m4a":
+        media_type = "audio/mp4"
+    elif suffix == ".flac":
+        media_type = "audio/flac"
+
+    if DEBUG:
+        logger.debug("[task %s] Serving audio: %s", task_id, file_path)
+    return FileResponse(path=str(file_path), media_type=media_type, filename=original_name)
+
+
+@app.get("/api/files")
+async def list_files():
+    """列出所有文件记录"""
+    files = get_file_store().list_files()
+    return JSONResponse(content=files)
 
 
 # ── 静态文件服务 (前端 SPA) ──────────────────────────────────

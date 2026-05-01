@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """WinASR 启动脚本"""
 import os
+import sys
 
 # ── 性能优化: 必须在 import torch 之前设置 ──
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+# ── Debug 模式: python run_server.py --debug ──
+if "--debug" in sys.argv:
+    os.environ["WINASR_DEBUG"] = "1"
+    sys.argv.remove("--debug")
 
 import uvicorn
 
