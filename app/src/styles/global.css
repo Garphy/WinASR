@@ -61,21 +61,20 @@ body {
 
 .app-main {
   flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-/* 普通页面: 可滚动，有内边距 */
-.app-main > *:not(.full-page) {
-  flex: 1;
   overflow-y: auto;
+  padding: 24px;
 }
 
-/* 全屏页面 (WorkspacePage): 填满父容器 */
+/* WorkspacePage: 全屏填满，覆盖 padding */
 .app-main > .full-page {
-  flex: 1;
-  min-height: 0;
+  margin: -24px;
+  overflow: hidden;
+}
+
+/* 有全屏页面时父容器不滚动 */
+.app-main:has(> .full-page) {
+  overflow: hidden;
+  padding: 0;
 }
 
 /* ── Buttons ── */
