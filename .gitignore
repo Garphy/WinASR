@@ -9,6 +9,7 @@ wheels/
 
 # Virtual environments
 .venv
+ecosystem.config.js
 
 # Output files
 output/
@@ -18,3 +19,6 @@ app/node_modules/
 app/dist/
 dist/
 samples/
+
+# logs
+logs/
