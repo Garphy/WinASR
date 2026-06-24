@@ -500,7 +500,7 @@ export default function WorkspacePage() {
           </span>
         </div>
         <div style={styles.topBarRight}>
-          <ExportMenu result={result} taskId={taskId!} />
+          <ExportMenu result={result} taskId={taskId!} filename={taskFilename} />
         </div>
       </div>
 

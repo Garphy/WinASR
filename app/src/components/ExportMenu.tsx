@@ -6,6 +6,7 @@ import { useEditorStore } from '../stores/editorStore';
 interface ExportMenuProps {
   result: TranscriptionResult;
   taskId: string;
+  filename?: string; // 原始音频文件名（用于导出默认文件名）
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -53,10 +54,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-export default function ExportMenu({ result, taskId }: ExportMenuProps) {
+export default function ExportMenu({ result, taskId, filename }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const speakerMap = useEditorStore((s) => s.speakerMap);
+
+  // 导出文件名：优先用原始音频文件名，去掉扩展名
+  const baseName = filename
+    ? filename.replace(/\.[^/.]+$/, '')
+    : `transcription-${taskId}`;
 
   // Close on outside click
   useEffect(() => {
@@ -75,15 +81,15 @@ export default function ExportMenu({ result, taskId }: ExportMenuProps) {
 
   const handleExportText = useCallback(() => {
     const content = exportAsText(mergedResult);
-    downloadFile(content, `transcription-${taskId}.txt`, 'text/plain');
+    downloadFile(content, `${baseName}.txt`, 'text/plain');
     setOpen(false);
-  }, [mergedResult, taskId]);
+  }, [mergedResult, baseName]);
 
   const handleExportMarkdown = useCallback(() => {
     const content = exportAsMarkdown(mergedResult);
-    downloadFile(content, `transcription-${taskId}.md`, 'text/markdown');
+    downloadFile(content, `${baseName}.md`, 'text/markdown');
     setOpen(false);
-  }, [mergedResult, taskId]);
+  }, [mergedResult, baseName]);
 
   return (
     <div ref={wrapperRef} style={styles.wrapper}>
