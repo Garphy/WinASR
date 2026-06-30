@@ -212,12 +212,22 @@ async def root():
 
 @app.get("/health")
 async def health():
+    import resource, torch
     pipeline = get_pipeline()
+    ru = resource.getrusage(resource.RUSAGE_SELF)
+    rss_mb = ru.ru_maxrss / 1024 / 1024  # macOS: bytes
+    mps_alloc = 0
+    if hasattr(torch.mps, "current_allocated_memory"):
+        mps_alloc = torch.mps.current_allocated_memory() / 1024 / 1024
     return {
         "status": "ok",
         "model_loaded": pipeline.is_loaded,
         "device": pipeline.device,
         "debug": DEBUG,
+        "memory": {
+            "rss_mb": round(rss_mb),
+            "mps_allocated_mb": round(mps_alloc),
+        },
     }
 
 

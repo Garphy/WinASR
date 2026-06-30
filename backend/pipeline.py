@@ -174,14 +174,24 @@ class ASRPipeline:
     def is_loaded(self) -> bool:
         return self._vad_model is not None
 
-    def _release_gpu_cache(self) -> None:
-        """释放 GPU 缓存，防止 MPS/CUDA 内存持续增长"""
+    def _release_memory(self) -> None:
+        """释放 GPU + CPU 缓存，防止内存持续增长"""
+        import ctypes, ctypes.util
+        # GPU 缓存
         if self.device == "mps":
             if hasattr(torch.mps, "empty_cache"):
                 torch.mps.empty_cache()
         elif self.device == "cuda":
             torch.cuda.empty_cache()
-        gc.collect()
+        # Python GC（多轮确保循环引用被回收）
+        for _ in range(3):
+            gc.collect()
+        # macOS: 强制 malloc 释放空闲内存回系统
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c"))
+            libc.malloc_zone_pressure_relief(None, 0)
+        except Exception:
+            pass
 
     def transcribe(
         self,
@@ -339,8 +349,8 @@ class ASRPipeline:
                     wav_path.unlink()
                 except PermissionError:
                     logger.debug("Could not delete converted WAV (locked): %s", wav_path)
-            # 释放 GPU 缓存，防止 MPS 内存持续增长
-            self._release_gpu_cache()
+            # 释放 GPU + CPU 缓存，防止内存持续增长
+            self._release_memory()
 
     # ── 内部方法 ──────────────────────────────────────────────
 

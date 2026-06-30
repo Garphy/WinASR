@@ -6,6 +6,8 @@ import sys
 # ── 性能优化: 必须在 import torch 之前设置 ──
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
+# MPS GPU 内存: 用完立即归还 OS（默认行为是缓存不释放）
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 
 # ── Debug 模式: python run_server.py --debug ──
 if "--debug" in sys.argv:
