@@ -39,15 +39,19 @@
 详见 [INSTALL.md](INSTALL.md)
 
 ```bash
-# 后端
+# 原生命令
+## 后端
 cd ~/WinASR
 uv sync
 .venv/bin/python run_server.py
 
-# 前端（新终端）
+## 前端（新终端）
 cd ~/WinASR/app
 pnpm install
 pnpm run dev
+
+# 推荐pm2方案管理，可逐个重启服务
+pm2 reload all
 ```
 
 打开 `http://localhost:5173`，上传音频即可使用。

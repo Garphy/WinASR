@@ -171,8 +171,9 @@ def _process_task(task_id: str, file_path: str, filename: str, language: str) ->
         now = datetime.now(timezone.utc).isoformat()
         task.state = TaskState.completed
         task.progress = 1.0
-        task.result = result.to_dict()
         task.completed_at = now
+        # 不在内存中保留 result — get_task_result 已支持从磁盘 JSON 按需加载
+        task.result = {"_loaded": True}
         _save_tasks()
         logger.info("[task %s] Completed: %s (%d segments)", task_id, filename, len(result.segments))
 

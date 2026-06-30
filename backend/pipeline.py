@@ -8,6 +8,7 @@ FunASR AutoModel 不支持 SenseVoice + SPK 原生串联 (需要 Paraformer 才�
 跨平台支持: macOS (MPS), Windows/Linux (CUDA), CPU fallback
 """
 
+import gc
 import os
 import subprocess
 import sys
@@ -173,6 +174,15 @@ class ASRPipeline:
     def is_loaded(self) -> bool:
         return self._vad_model is not None
 
+    def _release_gpu_cache(self) -> None:
+        """释放 GPU 缓存，防止 MPS/CUDA 内存持续增长"""
+        if self.device == "mps":
+            if hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
+        elif self.device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
     def transcribe(
         self,
         audio_path: Union[str, Path],
@@ -275,9 +285,16 @@ class ASRPipeline:
 
             _executor.shutdown(wait=False)
 
+            # 释放音频 tensor (GPU 内存大户)
+            del wav
+            gc.collect()
+
             # Step 3: 声纹聚类
             logger.info("Clustering %d speaker embeddings...", len(embeddings))
             speaker_labels = self._cluster_speakers(embeddings, len(raw_segments), raw_segments)
+
+            # 聚类完成，释放 embeddings
+            del embeddings
 
             # Step 4: 组装最终结果
             segments = []
@@ -322,6 +339,8 @@ class ASRPipeline:
                     wav_path.unlink()
                 except PermissionError:
                     logger.debug("Could not delete converted WAV (locked): %s", wav_path)
+            # 释放 GPU 缓存，防止 MPS 内存持续增长
+            self._release_gpu_cache()
 
     # ── 内部方法 ──────────────────────────────────────────────
 
