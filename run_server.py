@@ -3,6 +3,10 @@
 import os
 import sys
 
+# ── 加载 .env (AI 总结功能需要) ──
+from dotenv import load_dotenv
+load_dotenv()
+
 # ── 性能优化: 必须在 import torch 之前设置 ──
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")

@@ -8,6 +8,7 @@ import { useDraftStore } from '../stores/draftStore';
 import * as api from '../services/api';
 import SegmentBlock from './SegmentBlock';
 import ExportMenu from './ExportMenu';
+import SummarizeModal from './SummarizeModal';
 import type { Segment } from '../types';
 
 const API_BASE = '/api';
@@ -188,7 +189,6 @@ export default function WorkspacePage() {
   const togglePlay = useEditorStore((s) => s.togglePlay);
   const setSpeed = useEditorStore((s) => s.setSpeed);
   const updateTime = useEditorStore((s) => s.updateTime);
-  const startEditing = useEditorStore((s) => s.startEditing);
   const stopEditing = useEditorStore((s) => s.stopEditing);
   const updateSegmentText = useEditorStore((s) => s.updateSegmentText);
   const updateSpeakerName = useEditorStore((s) => s.updateSpeakerName);
@@ -201,6 +201,7 @@ export default function WorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskFilename, setTaskFilename] = useState<string>('');
+  const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
 
   const waveformRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
@@ -310,7 +311,7 @@ export default function WorkspacePage() {
     // Load audio with peaks if available
     const audioUrl = `${API_BASE}/tasks/${taskId}/audio`;
     if (result.peaks && result.peaks.length > 0) {
-      ws.load(audioUrl, result.peaks);
+      ws.load(audioUrl, result.peaks as unknown as (number[] | Float32Array)[]);
     } else {
       ws.load(audioUrl);
     }
@@ -500,6 +501,22 @@ export default function WorkspacePage() {
           </span>
         </div>
         <div style={styles.topBarRight}>
+          <button
+            style={{
+              padding: '6px 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#fff',
+              background: '#7c3aed',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+            }}
+            onClick={() => setSummarizeModalOpen(true)}
+            title="AI 总结"
+          >
+            🤖 AI 总结
+          </button>
           <ExportMenu result={result} taskId={taskId!} filename={taskFilename} />
         </div>
       </div>
@@ -551,7 +568,7 @@ export default function WorkspacePage() {
         <Virtuoso
           ref={virtuosoRef}
           data={segments}
-          itemContent={(index, seg: Segment) => {
+          itemContent={(_index, seg: Segment) => {
             const isActive = seg.id === activeSegmentId;
             const spkName = speakerMap[seg.speaker] ?? seg.speaker;
             return (
@@ -575,6 +592,15 @@ export default function WorkspacePage() {
         &nbsp;|&nbsp; 双击段落编辑 &nbsp;|&nbsp; <kbd>Enter</kbd> 保存 &nbsp;|&nbsp;{' '}
         <kbd>Esc</kbd> 取消编辑
       </div>
+
+      {/* Summarize Modal */}
+      {summarizeModalOpen && (
+        <SummarizeModal
+          taskId={taskId!}
+          filename={taskFilename}
+          onClose={() => setSummarizeModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

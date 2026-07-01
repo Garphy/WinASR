@@ -19,8 +19,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.pipeline import get_pipeline
-from backend.schema import TranscriptionResult, TaskStatus, TaskState
+from backend.schema import TranscriptionResult, TaskStatus, TaskState, SummarizeJob
 from backend.file_store import get_file_store
+from backend.summarize import run_summarize, get_summary_filename, get_preset_list, PRESETS
 
 # ── Debug 模式 ───────────────────────────────────────────────
 DEBUG = os.getenv("WINASR_DEBUG", "0").lower() in ("1", "true", "yes")
@@ -50,6 +51,7 @@ async def startup_event():
     """启动时加载持久化的任务数据"""
     _load_tasks()
     logger.info("Startup: loaded %d tasks", len(task_store))
+    _load_summarize_jobs()
 
 # ── CORS 中间件 ──────────────────────────────────────────────
 app.add_middleware(
@@ -204,6 +206,10 @@ async def root():
             "GET /api/tasks/{task_id}": "查询任务状态",
             "GET /api/tasks/{task_id}/result": "获取转写结果",
             "GET /api/tasks/{task_id}/audio": "获取音频文件",
+            "GET /api/summarize/presets": "列出 AI 总结预设",
+            "POST /api/tasks/{task_id}/summarize": "创建 AI 总结任务",
+            "GET /api/tasks/{task_id}/summarize": "查询总结状态",
+            "GET /api/tasks/{task_id}/summarize/result": "获取总结结果",
             "GET /api/files": "列出所有文件记录",
             "GET /health": "健康检查",
         },
@@ -381,6 +387,199 @@ async def list_files():
     """列出所有文件记录"""
     files = get_file_store().list_files()
     return JSONResponse(content=files)
+
+
+# ── AI 总结 API ──────────────────────────────────────────────
+
+# 总结任务存储 (task_id → SummarizeJob)，内存中只保留最新一个
+summarize_store: Dict[str, SummarizeJob] = {}
+
+
+def _save_summarize_meta(job: SummarizeJob):
+    """持久化总结任务元数据到磁盘。"""
+    meta_file = OUTPUT_DIR / f"{job.task_id}_summary_meta.json"
+    with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump(job.to_dict(), f, ensure_ascii=False)
+
+
+def _load_summarize_jobs():
+    """启动时从磁盘加载已完成的总结任务。"""
+    for meta_file in OUTPUT_DIR.glob("*_summary_meta.json"):
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            task_id = data.get("task_id", "")
+            if not task_id:
+                continue
+            job = SummarizeJob(
+                job_id=data.get("job_id", ""),
+                task_id=task_id,
+                preset=data.get("preset", "podcast_polish"),
+                state=TaskState(data.get("state", "completed")),
+                progress=data.get("progress", 1.0),
+                has_reference=data.get("has_reference", False),
+                include_intro=data.get("include_intro", True),
+                error=data.get("error"),
+                created_at=data.get("created_at"),
+                completed_at=data.get("completed_at"),
+            )
+            summarize_store[task_id] = job
+        except Exception as e:
+            logger.warning("Failed to load summarize meta %s: %s", meta_file, e)
+    logger.info("Loaded %d summarize jobs", len(summarize_store))
+
+
+def _process_summarize(job: SummarizeJob, reference_content: str | None):
+    """后台任务: 执行 AI 总结。"""
+    try:
+        job.state = TaskState.processing
+        job.progress = 0.1
+        _save_summarize_meta(job)
+        logger.info("[summarize %s] Processing started: preset=%s", job.job_id, job.preset)
+
+        def progress_cb(progress: float, message: str):
+            job.progress = progress
+            logger.debug("[summarize %s] %s (%.0f%%)", job.job_id, message, progress * 100)
+
+        result = run_summarize(
+            task_id=job.task_id,
+            preset=job.preset,
+            reference_content=reference_content,
+            include_intro=job.include_intro,
+            progress_callback=progress_cb,
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+        job.state = TaskState.completed
+        job.progress = 1.0
+        job.completed_at = now
+        _save_summarize_meta(job)
+        logger.info("[summarize %s] Completed: %d chars", job.job_id, len(result))
+
+    except Exception as e:
+        logger.exception("[summarize %s] Failed: %s", job.job_id, e)
+        job.state = TaskState.failed
+        job.error = str(e)
+        _save_summarize_meta(job)
+
+
+@app.get("/api/summarize/presets")
+async def list_summarize_presets():
+    """列出可用的总结预设"""
+    return JSONResponse(content=get_preset_list())
+
+
+@app.post("/api/tasks/{task_id}/summarize")
+async def create_summarize(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    preset: str = Query(default="podcast_polish", description="预设: podcast_polish | meeting_summary"),
+    include_intro: bool = Query(default=True, description="参考材料作为节目介绍（仅播客预设）"),
+    reference: UploadFile | None = File(default=None, description="参考材料文件（可选）"),
+):
+    """创建 AI 总结任务（异步）"""
+    # 检查转录任务是否存在
+    task = task_store.get(task_id)
+    if task is None:
+        # 也检查磁盘
+        result_file = OUTPUT_DIR / f"{task_id}.json"
+        if not result_file.exists():
+            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    # 检查预设
+    if preset not in PRESETS:
+        raise HTTPException(status_code=400, detail=f"未知预设: {preset}. 可用: {list(PRESETS.keys())}")
+
+    # 读取参考材料
+    reference_content = None
+    if reference:
+        raw = await reference.read()
+        try:
+            reference_content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            reference_content = raw.decode("gbk", errors="replace")
+        logger.info("[summarize] Reference loaded: %s (%d chars)", reference.filename, len(reference_content))
+
+    # 创建总结任务（替换已有的）
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc).isoformat()
+    job = SummarizeJob(
+        job_id=job_id,
+        task_id=task_id,
+        preset=preset,
+        state=TaskState.pending,
+        progress=0.0,
+        has_reference=reference_content is not None,
+        include_intro=include_intro,
+        created_at=now,
+    )
+    summarize_store[task_id] = job
+    _save_summarize_meta(job)
+
+    # 提交后台任务
+    background_tasks.add_task(_process_summarize, job, reference_content)
+    logger.info("[summarize %s] Created for task %s: preset=%s", job_id, task_id, preset)
+
+    return JSONResponse(status_code=202, content=job.to_dict())
+
+
+@app.get("/api/tasks/{task_id}/summarize")
+async def get_summarize_status(task_id: str):
+    """查询 AI 总结任务状态"""
+    job = summarize_store.get(task_id)
+    if job is None:
+        # 尝试从磁盘加载
+        meta_file = OUTPUT_DIR / f"{task_id}_summary_meta.json"
+        if meta_file.exists():
+            try:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                job = SummarizeJob(
+                    job_id=data.get("job_id", ""),
+                    task_id=task_id,
+                    preset=data.get("preset", "podcast_polish"),
+                    state=TaskState(data.get("state", "completed")),
+                    progress=data.get("progress", 1.0),
+                    has_reference=data.get("has_reference", False),
+                    include_intro=data.get("include_intro", True),
+                    error=data.get("error"),
+                    created_at=data.get("created_at"),
+                    completed_at=data.get("completed_at"),
+                )
+                summarize_store[task_id] = job
+            except Exception:
+                pass
+
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"No summarize job for task: {task_id}")
+
+    return JSONResponse(content=job.to_dict())
+
+
+@app.get("/api/tasks/{task_id}/summarize/result")
+async def get_summarize_result(task_id: str):
+    """获取 AI 总结结果（markdown）"""
+    job = summarize_store.get(task_id)
+    if job is None or job.state != TaskState.completed:
+        # 检查磁盘
+        summary_file = OUTPUT_DIR / f"{task_id}_summary.md"
+        if not summary_file.exists():
+            if job is None:
+                raise HTTPException(status_code=404, detail="No summarize job found")
+            raise HTTPException(status_code=400, detail=f"Summarize not completed (state={job.state.value})")
+
+    summary_file = OUTPUT_DIR / f"{task_id}_summary.md"
+    if not summary_file.exists():
+        raise HTTPException(status_code=404, detail="Summary file not found")
+
+    # 获取原始文件名用于下载名
+    task = task_store.get(task_id)
+    filename = get_summary_filename(task.filename) if task else f"{task_id}_asr.md"
+
+    with open(summary_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    return JSONResponse(content={"summary": content, "filename": filename})
 
 
 # ── 静态文件服务 (前端 SPA) ──────────────────────────────────

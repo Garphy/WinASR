@@ -196,8 +196,10 @@ export const useEditorStore = create<EditorState>()(
           start: splitTime,
           end: seg.end,
           text: '',
+          rawText: '',
           emotion: seg.emotion,
           language: seg.language,
+          events: [],
           isModified: true,
         };
 

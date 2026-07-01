@@ -1,4 +1,4 @@
-import type { Task, TranscriptionResult, Segment } from '../types';
+import type { Task, TranscriptionResult, Segment, SummarizePreset, SummarizeJob } from '../types';
 
 export const API_BASE = '/api';
 
@@ -89,4 +89,42 @@ export async function getTask(taskId: string): Promise<Task> {
 export async function getTaskResult(taskId: string): Promise<TranscriptionResult> {
   const raw = await request<Record<string, unknown>>(`${API_BASE}/tasks/${taskId}/result`);
   return mapResult(raw);
+}
+
+// ── AI 总结 API ──────────────────────────────────────────────
+
+export async function getSummarizePresets(): Promise<SummarizePreset[]> {
+  return await request<SummarizePreset[]>(`${API_BASE}/summarize/presets`);
+}
+
+export async function createSummarize(
+  taskId: string,
+  preset: string,
+  referenceFile: File | null,
+  includeIntro: boolean = true,
+): Promise<SummarizeJob> {
+  const formData = new FormData();
+  formData.append('preset', preset);
+  formData.append('include_intro', String(includeIntro));
+  if (referenceFile) {
+    formData.append('reference', referenceFile);
+  }
+
+  const response = await fetch(`${API_BASE}/tasks/${taskId}/summarize`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`API error ${response.status}: ${error}`);
+  }
+  return response.json();
+}
+
+export async function getSummarizeStatus(taskId: string): Promise<SummarizeJob> {
+  return await request<SummarizeJob>(`${API_BASE}/tasks/${taskId}/summarize`);
+}
+
+export async function getSummarizeResult(taskId: string): Promise<{ summary: string; filename: string }> {
+  return await request<{ summary: string; filename: string }>(`${API_BASE}/tasks/${taskId}/summarize/result`);
 }

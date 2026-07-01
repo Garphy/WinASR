@@ -32,3 +32,22 @@ export interface TranscriptionResult {
   peaks: number[];
   speakerMap: SpeakerMap;
 }
+
+export interface SummarizePreset {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface SummarizeJob {
+  job_id: string;
+  task_id: string;
+  preset: string;
+  state: TaskStatus;
+  progress: number;
+  has_reference: boolean;
+  has_result: boolean;
+  error?: string;
+  created_at?: string;
+  completed_at?: string;
+}
