@@ -179,8 +179,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   resultActions: {
     display: 'flex',
+    flexDirection: 'column' as const,
     gap: 10,
     marginTop: 14,
+  },
+  resultActionsRow: {
+    display: 'flex',
+    gap: 10,
   },
   downloadBtn: {
     flex: 1,
@@ -482,15 +487,17 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
           {/* 完成 — 操作按钮 */}
           {phase === 'completed' && (
             <div style={styles.resultActions}>
-              <button style={{ ...styles.startBtn, background: '#7c3aed' }} onClick={handlePreview}>
+              <button style={{ ...styles.startBtn, marginTop: 0 }} onClick={handlePreview}>
                 🔍 预览总结结果
               </button>
-              <button style={styles.downloadBtn} onClick={handleDownload}>
-                ⬇ 下载 {resultFilename || `${filename.replace(/\.[^/.]+$/, '')}_asr.md`}
-              </button>
-              <button style={styles.redoBtn} onClick={handleRedo}>
-                🔄 重新总结
-              </button>
+              <div style={styles.resultActionsRow}>
+                <button style={styles.downloadBtn} onClick={handleDownload}>
+                  ⬇ 下载 {resultFilename || `${filename.replace(/\.[^/.]+$/, '')}_asr.md`}
+                </button>
+                <button style={styles.redoBtn} onClick={handleRedo}>
+                  🔄 重新总结
+                </button>
+              </div>
             </div>
           )}
         </div>
