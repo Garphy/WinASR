@@ -59,6 +59,53 @@ pm2 reload all
 
 打开 `http://localhost:5173`，上传音频即可使用。
 
+## CLI 命令行使用
+
+除 Web 界面外，也可以直接用命令行完成转录和 AI 总结，适合批量处理或脚本集成。
+
+```bash
+cd ~/WinASR
+
+# 仅转录
+.venv/bin/python winasr.py input.m4a
+
+# 转录 + AI 总结（默认播客整理润色）
+.venv/bin/python winasr.py input.m4a -s
+
+# 转录 + 会议总结
+.venv/bin/python winasr.py input.m4a -s -p meeting_summary
+
+# 带参考材料
+.venv/bin/python winasr.py input.m4a -s -r intro.md
+
+# 指定语种 + 输出目录
+.venv/bin/python winasr.py input.m4a -l en -o ./output
+```
+
+### 参数说明
+
+| 参数 | 短写 | 说明 |
+|------|------|------|
+| `--language` | `-l` | 语种：`auto` / `zh` / `en` / `yue` / `ja` / `ko`（默认 `zh`） |
+| `--output` | `-o` | 输出目录（默认：音频同目录） |
+| `--summarize` | `-s` | 转录后进行 AI 总结 |
+| `--preset` | `-p` | 总结预设：`podcast_polish` / `meeting_summary`（默认 `podcast_polish`） |
+| `--reference` | `-r` | 参考材料文件（默认：自动查找同名 `.md`） |
+| `--no-intro` | | 不将参考材料作为节目介绍（仅播客预设） |
+| `--no-text` | | 不输出纯文本转录文件（`.txt`） |
+| `--device` | `-d` | 推理设备：`auto` / `cpu` / `mps` / `cuda`（默认 `auto`） |
+| `--verbose` | `-v` | 输出详细日志 |
+
+### 输出文件
+
+| 文件 | 内容 |
+|------|------|
+| `{name}.json` | 转录结构化结果（含时间戳、说话人、情绪等） |
+| `{name}.txt` | 纯文本转录（`[HH:MM:SS] SPEAKER: 文本` 格式） |
+| `{name}_asr.md` | AI 总结结果（仅 `-s` 时生成） |
+
+> 参考材料自动发现：脚本会自动查找与音频同名的 `.md` 文件（如 `input.m4a` → `input.md`），无需手动指定。
+
 ## 环境变量
 
 复制 `.env.example` 为 `.env`，按需填写：
