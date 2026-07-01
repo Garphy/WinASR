@@ -89,14 +89,39 @@ cd ~/WinASR
 
 macOS Apple Silicon 自动使用 MPS，无需额外配置。
 
-## 4. 前端安装
+## 4. 配置环境变量（AI 总结功能）
+
+AI 总结功能需要配置 LLM API。复制模板并填写：
+
+```bash
+cd ~/WinASR
+cp .env.example .env
+```
+
+编辑 `.env`：
+
+```bash
+# LLM API 配置（OpenAI 兼容接口）
+WINASR_LLM_API_BASE=https://api.openai.com/v1    # API 地址
+WINASR_LLM_API_KEY=sk-xxx                          # 你的 API Key
+WINASR_LLM_MODEL=gpt-4o                            # 模型名称
+WINASR_LLM_MAX_CONTEXT=1000000                     # 最大上下文长度（可选，默认 1M）
+```
+
+- 支持任何 OpenAI 兼容 API（如 DeepSeek、Moonshot、本地 Ollama 等）
+- `.env` **仅在后端启动时加载**，修改后必须重启服务才生效
+- Prompt 模板（`backend/prompts/`）则支持热更新，修改 `.md` 文件无需重启
+
+> 如不需要 AI 总结功能，可跳过此步骤，不影响转写功能。
+
+## 5. 前端安装
 
 ```bash
 cd app
 pnpm install
 ```
 
-## 5. 启动服务
+## 6. 启动服务
 
 **终端 1 — 后端（端口 8000）：**
 
@@ -174,3 +199,18 @@ kill $(lsof -ti:8000)  # 终止
 ### Q: 后端重启后任务列表为空？
 
 任务存储在内存中，重启后清空。但转写结果（`output/*.json`）和音频文件（`output/files/`）持久保存在磁盘上，不受影响。
+
+### Q: 修改 .env 后 AI 总结不生效？
+
+`.env` 在后端启动时加载一次，修改后必须重启服务：
+
+```bash
+# 如果用 pm2
+pm2 reload winasr
+
+# 如果手动启动
+# 先 Ctrl+C 停止，再重新启动
+.venv/bin/python run_server.py
+```
+
+> Prompt 模板（`backend/prompts/*.md`）支持热更新，修改后无需重启。
