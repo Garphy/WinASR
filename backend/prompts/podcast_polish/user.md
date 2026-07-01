@@ -1,5 +1,6 @@
 请整理以下播客转录文字稿。
 
+音频文件名：{audio_title}
 {reference_section}
 
 ## 待整理的转录文字稿

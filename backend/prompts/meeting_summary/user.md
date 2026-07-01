@@ -1,5 +1,6 @@
 请对以下会议/访谈转录文字稿进行总结。
 
+音频文件名：{audio_title}
 {reference_section}
 
 ## 待总结的转录文字稿

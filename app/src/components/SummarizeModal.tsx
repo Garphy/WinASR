@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../services/api';
+import { API_BASE } from '../services/api';
 import { downloadFile } from '../utils/export';
 import type { SummarizePreset } from '../types';
 
@@ -224,9 +225,8 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
-  const [result, setResult] = useState<string>('');
-  const [resultFilename, setResultFilename] = useState('');
   const [error, setError] = useState<string>('');
+  const [resultFilename, setResultFilename] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -248,7 +248,8 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
     api.getSummarizeStatus(taskId).then((job) => {
       if (job.state === 'completed' && job.has_result) {
         setPhase('completed');
-        setResult(''); // 按需加载
+        // 预加载文件名
+        api.getSummarizeResult(taskId).then(({ filename }) => setResultFilename(filename)).catch(() => {});
       } else if (job.state === 'processing' || job.state === 'pending') {
         setPhase('processing');
         setProgress(job.progress);
@@ -281,6 +282,8 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
           }
           setPhase('completed');
           setProgress(1);
+          // 加载文件名
+          api.getSummarizeResult(taskId).then(({ filename }) => setResultFilename(filename)).catch(() => {});
         } else if (job.state === 'failed') {
           if (pollRef.current) {
             clearInterval(pollRef.current);
@@ -320,21 +323,15 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
     }
   }, [taskId]);
 
-  const handleLoadResult = useCallback(async () => {
-    try {
-      const { summary, filename: fname } = await api.getSummarizeResult(taskId);
-      setResult(summary);
-      setResultFilename(fname);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载结果失败');
-    }
+  const handlePreview = useCallback(() => {
+    window.open(`${API_BASE}/tasks/${taskId}/summarize/preview`, '_blank');
   }, [taskId]);
 
   const handleRedo = useCallback(() => {
     setPhase('idle');
-    setResult('');
     setError('');
     setProgress(0);
+    setResultFilename('');
   }, []);
 
   const handleFileSelect = useCallback((file: File) => {
@@ -482,28 +479,19 @@ export default function SummarizeModal({ taskId, filename, onClose }: SummarizeM
             </>
           )}
 
-          {/* 完成 — 结果预览 */}
+          {/* 完成 — 操作按钮 */}
           {phase === 'completed' && (
-            <>
-              {!result ? (
-                <button style={styles.startBtn} onClick={handleLoadResult}>
-                  📖 加载总结结果
-                </button>
-              ) : (
-                <>
-                  <label style={styles.label}>总结结果预览</label>
-                  <div style={styles.resultPreview}>{result}</div>
-                  <div style={styles.resultActions}>
-                    <button style={styles.downloadBtn} onClick={handleDownload}>
-                      ⬇ 下载 {resultFilename || `${filename.replace(/\.[^/.]+$/, '')}_asr.md`}
-                    </button>
-                    <button style={styles.redoBtn} onClick={handleRedo}>
-                      🔄 重新总结
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
+            <div style={styles.resultActions}>
+              <button style={{ ...styles.startBtn, background: '#7c3aed' }} onClick={handlePreview}>
+                🔍 预览总结结果
+              </button>
+              <button style={styles.downloadBtn} onClick={handleDownload}>
+                ⬇ 下载 {resultFilename || `${filename.replace(/\.[^/.]+$/, '')}_asr.md`}
+              </button>
+              <button style={styles.redoBtn} onClick={handleRedo}>
+                🔄 重新总结
+              </button>
+            </div>
           )}
         </div>
       </div>

@@ -158,6 +158,7 @@ def split_transcript(text: str, max_tokens: int) -> list[str]:
 def build_user_prompt(
     preset: str,
     transcript: str,
+    audio_title: str = "",
     reference: Optional[str] = None,
     include_intro: bool = True,
 ) -> str:
@@ -188,6 +189,7 @@ def build_user_prompt(
         timestamp_instruction = ""
 
     return template.format(
+        audio_title=audio_title,
         reference_section=reference_section,
         transcript=transcript,
         timestamp_instruction=timestamp_instruction,
@@ -200,6 +202,7 @@ def call_llm(
     client: OpenAI,
     preset: str,
     transcript: str,
+    audio_title: str = "",
     reference: Optional[str] = None,
     include_intro: bool = True,
 ) -> str:
@@ -218,7 +221,7 @@ def call_llm(
 
     if len(chunks) == 1:
         # 单段处理
-        user_prompt = build_user_prompt(preset, transcript, reference, include_intro)
+        user_prompt = build_user_prompt(preset, transcript, audio_title, reference, include_intro)
         logger.info("LLM 调用 (单段): preset=%s, model=%s, tokens≈%d",
                      preset, config["model"], estimate_tokens(user_prompt))
         return _call_llm_single(client, config["model"], system_prompt, user_prompt)
@@ -230,7 +233,7 @@ def call_llm(
     for i, chunk in enumerate(chunks):
         # 参考材料只在第一段传入
         ref = reference if i == 0 else None
-        user_prompt = build_user_prompt(preset, chunk, ref, include_intro)
+        user_prompt = build_user_prompt(preset, chunk, audio_title, ref, include_intro)
 
         # 多段时添加上下文提示
         if i > 0:
@@ -301,6 +304,7 @@ def _build_merge_prompt(preset: str, partial_summaries: str) -> str:
 def run_summarize(
     task_id: str,
     preset: str,
+    audio_title: str = "",
     reference_content: Optional[str] = None,
     include_intro: bool = True,
     progress_callback=None,
@@ -310,6 +314,7 @@ def run_summarize(
     Args:
         task_id: 关联的转录任务 ID
         preset: 预设 key ("podcast_polish" | "meeting_summary")
+        audio_title: 音频文件名（不含扩展名），用作总结标题
         reference_content: 参考材料文本（可选）
         include_intro: 是否将参考材料作为节目介绍（仅播客预设有效）
         progress_callback: 进度回调 fn(progress: float, message: str)
@@ -348,6 +353,7 @@ def run_summarize(
         client=client,
         preset=preset,
         transcript=transcript,
+        audio_title=audio_title,
         reference=reference_content,
         include_intro=include_intro,
     )

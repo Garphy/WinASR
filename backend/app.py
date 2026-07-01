@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
-from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -210,6 +210,7 @@ async def root():
             "POST /api/tasks/{task_id}/summarize": "创建 AI 总结任务",
             "GET /api/tasks/{task_id}/summarize": "查询总结状态",
             "GET /api/tasks/{task_id}/summarize/result": "获取总结结果",
+            "GET /api/tasks/{task_id}/summarize/preview": "预览总结结果（HTML页面）",
             "GET /api/files": "列出所有文件记录",
             "GET /health": "健康检查",
         },
@@ -441,9 +442,16 @@ def _process_summarize(job: SummarizeJob, reference_content: str | None):
             job.progress = progress
             logger.debug("[summarize %s] %s (%.0f%%)", job.job_id, message, progress * 100)
 
+        # 获取音频文件名作为总结标题
+        task = task_store.get(job.task_id)
+        audio_title = ""
+        if task and task.filename:
+            audio_title = task.filename.rsplit(".", 1)[0] if "." in task.filename else task.filename
+
         result = run_summarize(
             task_id=job.task_id,
             preset=job.preset,
+            audio_title=audio_title,
             reference_content=reference_content,
             include_intro=job.include_intro,
             progress_callback=progress_cb,
@@ -580,6 +588,66 @@ async def get_summarize_result(task_id: str):
         content = f.read()
 
     return JSONResponse(content={"summary": content, "filename": filename})
+
+
+@app.get("/api/tasks/{task_id}/summarize/preview")
+async def preview_summarize_result(task_id: str):
+    """以 HTML 页面形式展示总结结果（Markdown 渲染）"""
+    job = summarize_store.get(task_id)
+    if job is None or job.state != TaskState.completed:
+        summary_file = OUTPUT_DIR / f"{task_id}_summary.md"
+        if not summary_file.exists():
+            raise HTTPException(status_code=404, detail="No summarize result found")
+        raise HTTPException(status_code=400, detail="Summarize not completed")
+
+    summary_file = OUTPUT_DIR / f"{task_id}_summary.md"
+    if not summary_file.exists():
+        raise HTTPException(status_code=404, detail="Summary file not found")
+
+    with open(summary_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 获取音频文件名作为页面标题
+    task = task_store.get(task_id)
+    page_title = f"总结结果 — {task.filename}" if task else "AI 总结结果"
+
+    # 使用 JSON 编码安全地将内容嵌入 HTML
+    content_json = json.dumps(content, ensure_ascii=False)
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px 20px; background: #0f0f0f; color: #e0e0e0; line-height: 1.7; }}
+  h1 {{ color: #fff; border-bottom: 1px solid #333; padding-bottom: 12px; }}
+  h2 {{ color: #c9d1d9; margin-top: 28px; }}
+  h3 {{ color: #b0b8c4; }}
+  a {{ color: #58a6ff; }}
+  code {{ background: #1a1a2e; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }}
+  pre {{ background: #1a1a2e; padding: 16px; border-radius: 8px; overflow-x: auto; }}
+  pre code {{ background: none; padding: 0; }}
+  blockquote {{ border-left: 3px solid #333; margin-left: 0; padding-left: 16px; color: #8b949e; }}
+  hr {{ border: none; border-top: 1px solid #333; margin: 24px 0; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #333; padding: 8px 12px; text-align: left; }}
+  th {{ background: #161b22; }}
+  p {{ margin: 8px 0; }}
+</style>
+</head>
+<body>
+<div id="content"></div>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  const content = {content_json};
+  document.getElementById('content').innerHTML = marked.parse(content);
+</script>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html)
 
 
 # ── 静态文件服务 (前端 SPA) ──────────────────────────────────
