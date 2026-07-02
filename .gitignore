@@ -1,3 +1,9 @@
+*.mp3
+*.m4a
+*.json
+*.txt
+*.md
+
 # Python-generated files
 __pycache__/
 *.py[oc]
