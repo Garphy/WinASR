@@ -57,7 +57,7 @@ pnpm run dev
 pm2 reload all
 ```
 
-打开 `http://localhost:5173`，上传音频即可使用。
+打开 `http://localhost:5273`，上传音频即可使用。
 
 ## CLI 命令行使用
 
@@ -158,7 +158,7 @@ cp .env.example .env
 ### POST /api/tasks
 
 ```bash
-curl -X POST http://localhost:8000/api/tasks \
+curl -X POST http://localhost:8200/api/tasks \
   -F "file=@meeting.m4a" \
   -F "language=zh"
 # 返回: {"task_id": "abc123", "state": "pending", ...}
@@ -167,7 +167,7 @@ curl -X POST http://localhost:8000/api/tasks \
 ### POST /transcribe
 
 ```bash
-curl -X POST http://localhost:8000/transcribe \
+curl -X POST http://localhost:8200/transcribe \
   -F "file=@meeting.m4a" \
   -F "output_format=text"
 ```

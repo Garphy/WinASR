@@ -123,7 +123,7 @@ pnpm install
 
 ## 6. 启动服务
 
-**终端 1 — 后端（端口 8000）：**
+**终端 1 — 后端（端口 8200）：**
 
 ```bash
 cd ~/WinASR
@@ -136,14 +136,14 @@ cd ~/WinASR
 .venv/bin/python run_server.py --debug
 ```
 
-**终端 2 — 前端（端口 5173）：**
+**终端 2 — 前端（端口 5273）：**
 
 ```bash
 cd ~/WinASR/app
 pnpm run dev
 ```
 
-打开浏览器访问 `http://localhost:5173`。
+打开浏览器访问 `http://localhost:5273`。
 
 ## 6. 构建生产版本
 
@@ -156,7 +156,7 @@ pnpm run build
 
 ## 内网访问
 
-Vite 已配置 `host: true`，前端自动监听 `0.0.0.0`。局域网内通过 `http://<本机IP>:5173` 访问。
+Vite 已配置 `host: true`，前端自动监听 `0.0.0.0`。局域网内通过 `http://<本机IP>:5273` 访问。
 
 ## 文件管理
 
@@ -191,9 +191,9 @@ cd ~/WinASR
 ### Q: 端口被占用？
 
 ```bash
-lsof -ti:8000   # 查看后端端口占用
-lsof -ti:5173   # 查看前端端口占用
-kill $(lsof -ti:8000)  # 终止
+lsof -ti:8200   # 查看后端端口占用
+lsof -ti:5273   # 查看前端端口占用
+kill $(lsof -ti:8200)  # 终止
 ```
 
 ### Q: 后端重启后任务列表为空？
